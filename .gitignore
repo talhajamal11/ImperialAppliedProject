@@ -1,2 +1,4 @@
 .DS_Store
 data/api_keys.json
+venv/
+ImperialResources/
