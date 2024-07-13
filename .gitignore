@@ -2,3 +2,4 @@
 data/api_keys.json
 venv/
 ImperialResources/
+.venv/
