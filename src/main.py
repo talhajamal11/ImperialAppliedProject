@@ -92,13 +92,15 @@ class GamblerAgent(Agent):
         self.momentum_period = random.choice([1, 2, 3, 4, 5])  # Choose a random momentum period between 1 and 5 days
         self.momentum_tag = f"{self.momentum_period}-day Momentum"
         self.current_position = None  # Track current open position
+        self.hold_time = None  # To store the holding period
+        self.last_trade_time = None  # To track when the position was opened
 
     def place_order(self, recent_prices, current_time):
         if self.is_liquidated:
             return None
 
         # Check if it's time to close a position
-        if self.current_position:
+        if self.current_position and current_time >= self.last_trade_time + self.hold_time:
             order_type = "sell" if self.current_position['type'] == "buy" else "buy"
             price = round(recent_prices[-1], 2)
             size = round(self.current_position['size'], 2)
@@ -129,6 +131,10 @@ class GamblerAgent(Agent):
             # Store the order in the order history and update position
             self.current_position = {"type": "buy" if direction > 0 else "sell", "price": price, "size": abs(order_size)}
             self.order_history.append((price, order_size))
+
+            # Set a random holding period between 240 (half a day) and 4800 (10 days) ticks
+            self.hold_time = random.randint(240, 4800)
+            self.last_trade_time = current_time  # Set the time when the position was opened
 
             return ("buy" if direction > 0 else "sell", price, abs(order_size))
 
@@ -336,7 +342,8 @@ class OrderBook:
         sell_snapshot = {price: sum(order["size"] for order in orders) for price, orders in self.sell_orders.items()}
         return buy_snapshot, sell_snapshot
 
-    def plot_order_book(self, title="Order Book Snapshot"):
+    def plot_order_book(self, market_maker_bid=None, market_maker_bid_volume=None, 
+                        market_maker_ask=None, market_maker_ask_volume=None, title="Order Book Snapshot"):
         """Plot the order book showing bid and ask prices with volumes."""
         buy_snapshot, sell_snapshot = self.get_order_book_snapshot()
 
@@ -356,12 +363,21 @@ class OrderBook:
         # Plot Asks (Sell orders)
         plt.bar(sell_prices, sell_volumes, color='red', alpha=0.5, width=0.02, label='Asks', align='center')
 
+        # Plot Market Maker's Bid
+        if market_maker_bid is not None and market_maker_bid_volume is not None:
+            plt.bar(market_maker_bid, market_maker_bid_volume, color='blue', alpha=0.7, width=0.02, label='Market Maker Bid', align='center')
+
+        # Plot Market Maker's Ask
+        if market_maker_ask is not None and market_maker_ask_volume is not None:
+            plt.bar(market_maker_ask, market_maker_ask_volume, color='orange', alpha=0.7, width=0.02, label='Market Maker Ask', align='center')
+
         plt.xlabel('Price')
         plt.ylabel('Volume')
         plt.title(title)
         plt.legend()
         plt.grid(True)
         plt.show()
+
 
 # Analysis Class
 class Analysis:
@@ -439,12 +455,13 @@ def pause_and_resume():
 if __name__ == "__main__":
 
     # Simulate Stock Prices
-    simulator = PriceSimulator(initial_price=100, mu=0.0001, sigma=0.25, dt=1, seed=50)
+    seed=50
+    simulator = PriceSimulator(initial_price=100, mu=0.0001, sigma=0.25, dt=1, seed=seed)
     prices = simulator.simulate_brownian_motion_prices()
     price_df = simulator.create_dataframe(prices)
     
     # Agents Setup
-    np.random.seed(50)
+    np.random.seed(seed)
     HEDGE_FUNDS = 0
     MARKET_MAKER = 1    
     GAMBLING_AGENTS = 1000 - HEDGE_FUNDS - MARKET_MAKER # Subtract 5 Hedge Funds and 1 Market Maker
@@ -487,8 +504,6 @@ if __name__ == "__main__":
             if order:
                 print(f"Agent ID {agent.id} Order -> Position: {order[0]}, Price: {order[1]}, Volume: {order[2]}, Aggression: {agent.aggressiveness}")
                 order_book.add_order(agent.id, order[0], order[1], size=order[2], timestamp=t)
-       
-        order_book.plot_order_book()
 
         # Market Maker places orders based on its strategy
         bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory)
@@ -496,7 +511,8 @@ if __name__ == "__main__":
         order_book.add_order(market_maker.id, "sell", ask, size=ask_volume, timestamp=t)
         print(f"Market Maker Order: Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
         
-        pause_and_resume()
+        order_book.plot_order_book(market_maker_bid=bid, market_maker_bid_volume=10000, market_maker_ask=ask, market_maker_ask_volume=10000)
+        # pause_and_resume()
         
         # Execute orders
         executed_orders = order_book.execute_trades(current_price=price, agents=agents,timestamp=t)
@@ -505,12 +521,16 @@ if __name__ == "__main__":
         for order in executed_orders:
             
             agent = market_maker if order['buyer_id'] == market_maker.id or order['seller_id'] == market_maker.id else agents[order['buyer_id'] - 1]
-            
+
             if order['buyer_id'] == agent.id:
+                print("Buyer")
+                print(agent)
                 agent.inventory += order['size']
                 agent.cash -= order['price'] * order['size']
             
             if order['seller_id'] == agent.id:
+                print("Seller")
+                print(agent)
                 agent.inventory -= order['size']
                 agent.cash += order['price'] * order['size']
 
