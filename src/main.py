@@ -243,7 +243,6 @@ class MarketMaker(Agent):
         
         return max(1, round(optimal_volume, 2))  # Ensure the volume is at least 1
 
-
     def place_order(self, current_price, order_book, inventory):
         bid_price, ask_price = self.calculate_optimal_prices(current_price, inventory)
         bid_volume = self.calculate_optimal_volume(bid_price, order_book, inventory)
@@ -254,6 +253,19 @@ class MarketMaker(Agent):
         self.order_history.append(("sell", ask_price, ask_volume))
         
         return bid_price, bid_volume, ask_price, ask_volume
+
+    def update_pnl(self, trade_price, trade_size, trade_type):
+        if trade_type == "buy":
+            self.inventory += trade_size
+            self.cash -= trade_price * trade_size
+        elif trade_type == "sell":
+            self.inventory -= trade_size
+            self.cash += trade_price * trade_size
+
+        if self.cash < 0:
+            self.is_liquidated = True  # Liquidate if cash is negative
+            print("MARKET MAKER HAS GONE BANKRUPT")
+            pause_and_resume()
 
 # Order Book Class
 class OrderBook:
@@ -314,8 +326,16 @@ class OrderBook:
                     sell_order["size"] -= trade_size
 
                     # Update agents' PnL
-                    agents[buy_order["agent_id"]].update_pnl(sell_price, trade_size, "buy")
-                    agents[sell_order["agent_id"]].update_pnl(sell_price, trade_size, "sell")
+                    if buy_order["agent_id"] == market_maker.id:
+                        market_maker.update_pnl(sell_price, trade_size, "buy")
+                    else:
+                        agents[buy_order["agent_id"] - 1].update_pnl(sell_price, trade_size, "buy")
+
+                    if sell_order["agent_id"] == market_maker.id:
+                        market_maker.update_pnl(sell_price, trade_size, "sell")
+                    else:
+                        agents[sell_order["agent_id"] - 1].update_pnl(sell_price, trade_size, "sell")
+
 
                     # Remove orders if completely filled
                     if buy_order["size"] == 0:
@@ -403,40 +423,29 @@ class Analysis:
         return df
 
     def plot_results(self, df):
-        plt.figure(figsize=(10, 6))
+        market_maker_data = df[df['is_market_maker']]
 
-        # Plot PnL
-        for agent_id in df['agent_id'].unique():
-            agent_data = df[df['agent_id'] == agent_id]
-            if agent_data['is_market_maker'].iloc[0]:
-                plt.plot(agent_data.index, agent_data['PnL'], label=f'Market Maker {agent_id}', linestyle='-', color='red')
-            else:
-                if agent_id <= 5:
-                    plt.plot(agent_data.index, agent_data['PnL'], label=f'Agent {agent_id}', linestyle='--', alpha=0.5)
+        # Create a figure and two subplots
+        fig, axs = plt.subplots(2, 1, figsize=(10, 12))
 
-        plt.title('PnL Over Time')
-        plt.xlabel('Time')
-        plt.ylabel('PnL')
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+        # Plot PnL in the first subplot
+        axs[0].plot(market_maker_data.index, market_maker_data['PnL'], label='Market Maker PnL', color='red')
+        axs[0].set_title('Market Maker PnL Over Time')
+        axs[0].set_xlabel('Time')
+        axs[0].set_ylabel('PnL')
+        axs[0].legend()
+        axs[0].grid(True)
 
-        plt.figure(figsize=(10, 6))
+        # Plot Inventory in the second subplot
+        axs[1].plot(market_maker_data.index, market_maker_data['inventory'], label='Market Maker Inventory', color='blue')
+        axs[1].set_title('Market Maker Inventory Over Time')
+        axs[1].set_xlabel('Time')
+        axs[1].set_ylabel('Inventory')
+        axs[1].legend()
+        axs[1].grid(True)
 
-        # Plot Inventory
-        for agent_id in df['agent_id'].unique():
-            agent_data = df[df['agent_id'] == agent_id]
-            if agent_data['is_market_maker'].iloc[0]:
-                plt.plot(agent_data.index, agent_data['inventory'], label=f'Market Maker {agent_id}', linestyle='-', color='blue')
-            else:
-                if agent_id <= 5:
-                    plt.plot(agent_data.index, agent_data['inventory'], label=f'Agent {agent_id}', linestyle='--', alpha=0.5)
-
-        plt.title('Inventory Over Time')
-        plt.xlabel('Time')
-        plt.ylabel('Inventory')
-        plt.legend()
-        plt.grid(True)
+        # Adjust layout to prevent overlap
+        plt.tight_layout()
         plt.show()
 
 def pause_and_resume():
@@ -482,6 +491,9 @@ if __name__ == "__main__":
     window_size = 480 * 5  # Last 5 days of trading
 
     for t, price in enumerate(prices):
+        if GAMBLING_AGENTS == 0:
+            print("Gamblers Bankrupt - Simulation Finished")
+            break
         if t < window_size:
             continue  # Wait until we have enough data for the gamblers
 
@@ -502,16 +514,15 @@ if __name__ == "__main__":
             
             # Check if the current agent's order is valid and add to the order book
             if order:
-                print(f"Agent ID {agent.id} Order -> Position: {order[0]}, Price: {order[1]}, Volume: {order[2]}, Aggression: {agent.aggressiveness}")
+                # print(f"Agent ID {agent.id} Order -> Position: {order[0]}, Price: {order[1]}, Volume: {order[2]}, Aggression: {agent.aggressiveness}")
                 order_book.add_order(agent.id, order[0], order[1], size=order[2], timestamp=t)
 
         # Market Maker places orders based on its strategy
         bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory)
         order_book.add_order(market_maker.id, "buy", bid, size=bid_volume, timestamp=t)
         order_book.add_order(market_maker.id, "sell", ask, size=ask_volume, timestamp=t)
-        print(f"Market Maker Order: Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
+        # print(f"Market Maker Order: Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
         
-        order_book.plot_order_book(market_maker_bid=bid, market_maker_bid_volume=10000, market_maker_ask=ask, market_maker_ask_volume=10000)
         # pause_and_resume()
         
         # Execute orders
@@ -523,20 +534,18 @@ if __name__ == "__main__":
             agent = market_maker if order['buyer_id'] == market_maker.id or order['seller_id'] == market_maker.id else agents[order['buyer_id'] - 1]
 
             if order['buyer_id'] == agent.id:
-                print("Buyer")
-                print(agent)
                 agent.inventory += order['size']
                 agent.cash -= order['price'] * order['size']
             
             if order['seller_id'] == agent.id:
-                print("Seller")
-                print(agent)
                 agent.inventory -= order['size']
                 agent.cash += order['price'] * order['size']
 
             if agent.cash < 0:
                 agent.is_liquidated = True  # Mark agent as liquidated
                 print(f"{agent}  has been liquidated at time {t}")
+                GAMBLING_AGENTS -= 1
+                print(f"Gamblers Left: {GAMBLING_AGENTS}")
 
         # Collect data for analysis
         for agent in agents:
@@ -544,10 +553,14 @@ if __name__ == "__main__":
         analysis.collect_data(market_maker, price, is_market_maker=True)
 
         # Optionally plot the order book at specific time intervals
-        if t % (480 * 10) == 0:  # Plot every 10 trading days
-            order_book.plot_order_book(title=f"Order Book Snapshot at T={t}")
+        # if t % (480 * 10) == 0:  # Plot every 10 trading days
+        #     order_book.plot_order_book(market_maker_bid=bid,
+        #                                market_maker_bid_volume=bid_volume,
+        #                                market_maker_ask=ask,
+        #                                market_maker_ask_volume=ask_volume,
+        #                                title=f"Order Book Snapshot at T={t}")
 
-    # # Analyze and Plot Results
-    # df = analysis.create_dataframe()
-    # df = analysis.analyze_profit(df)
-    # analysis.plot_results(df)
+    # Analyze and Plot Results
+    df = analysis.create_dataframe()
+    df = analysis.analyze_profit(df)
+    analysis.plot_results(df)
