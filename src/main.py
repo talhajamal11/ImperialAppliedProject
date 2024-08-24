@@ -122,7 +122,7 @@ class GamblerAgent(Agent):
 
             # Calculate order size and price
             price = round(recent_prices[-1] * (1 + (0.01 * self.aggressiveness) * direction), 2)
-            order_size = round((self.cash * self.aggressiveness) / price, 2) / 10
+            order_size = round((self.cash * self.aggressiveness) / price, 2) / 1
 
             # Ensure the agent can afford the position
             if self.cash < (abs(order_size) * price):
@@ -133,7 +133,7 @@ class GamblerAgent(Agent):
             self.order_history.append((price, order_size))
 
             # Set a random holding period between 240 (half a day) and 4800 (10 days) ticks
-            self.hold_time = random.randint(5, 60)
+            self.hold_time = random.randint(240, 4800)
             self.last_trade_time = current_time  # Set the time when the position was opened
 
             return ("buy" if direction > 0 else "sell", price, abs(order_size))
@@ -208,6 +208,11 @@ class MarketMaker(Agent):
     def __init__(self, id, initial_cash, initial_inventory, aggressiveness=0.1, risk_aversion=0.1):
         super().__init__(id, initial_cash, initial_inventory, aggressiveness)
         self.risk_aversion = risk_aversion
+        self.spread_history = []  # Track bid-ask spread over time
+        self.volume_history = []  # Track quoted volumes over time
+        self.inventory_history = []  # Track inventory over time
+        self.pnl_history = []  # Track PnL over time
+        self.time_history = []  # Track timestamps for analysis
 
     def calculate_optimal_prices(self, current_price, inventory):
         lambda_b = max(0, 1 - self.risk_aversion * inventory)
@@ -217,6 +222,8 @@ class MarketMaker(Agent):
         ask_price = current_price + (1 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_a)
         
         self.order_history.append((bid_price, ask_price))
+        self.spread_history.append(ask_price - bid_price)  # Record the bid-ask spread
+        
         return (bid_price, ask_price)
     
     def calculate_optimal_volume(self, current_price, order_book, inventory):
@@ -251,6 +258,8 @@ class MarketMaker(Agent):
         # Store the order in the order history
         self.order_history.append(("buy", bid_price, bid_volume))
         self.order_history.append(("sell", ask_price, ask_volume))
+        self.volume_history.append((bid_volume, ask_volume))  # Record quoted volumes
+        self.inventory_history.append(inventory)  # Record current inventory
         
         return bid_price, bid_volume, ask_price, ask_volume
 
@@ -262,10 +271,76 @@ class MarketMaker(Agent):
             self.inventory -= trade_size
             self.cash += trade_price * trade_size
 
+        # Record PnL after each trade
+        pnl = self.cash + self.inventory * trade_price
+        self.pnl_history.append(pnl)
+
         if self.cash < 0:
             self.is_liquidated = True  # Liquidate if cash is negative
             print("MARKET MAKER HAS GONE BANKRUPT")
             pause_and_resume()
+
+    def analyze_spread_vs_inventory(self):
+        """Plot the bid-ask spread as a function of inventory."""
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.inventory_history, self.spread_history, 'o-', color='purple')
+        plt.xlabel('Inventory')
+        plt.ylabel('Bid-Ask Spread')
+        plt.title('Bid-Ask Spread vs Inventory')
+        plt.grid(True)
+        plt.savefig("data/spread_vs_inventory.png", dpi=300)
+
+    def analyze_volume_vs_inventory(self):
+        """Plot the quoted volumes as a function of inventory."""
+        bid_volumes, ask_volumes = zip(*self.volume_history)
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.inventory_history, bid_volumes, 'o-', color='blue', label='Bid Volume')
+        plt.plot(self.inventory_history, ask_volumes, 'o-', color='orange', label='Ask Volume')
+        plt.xlabel('Inventory')
+        plt.ylabel('Volume')
+        plt.title('Quoted Volumes vs Inventory')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("data/volume_vs_inventory.png", dpi=300)
+
+    def analyze_pnl_vs_inventory(self):
+        """Plot PnL as a function of inventory."""
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.inventory_history, self.pnl_history, 'o-', color='green')
+        plt.xlabel('Inventory')
+        plt.ylabel('PnL')
+        plt.title('PnL vs Inventory')
+        plt.grid(True)
+        plt.savefig("data/pnl_vs_inventory.png", dpi=300)
+
+    def analyze_pnl_vs_time(self):
+        """Plot PnL over time."""
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(self.pnl_history)), self.pnl_history, color='red')
+        plt.xlabel('Time')
+        plt.ylabel('PnL')
+        plt.title('PnL Over Time')
+        plt.grid(True)
+        plt.savefig("data/PnL.png", dpi=300)
+
+    def analyze_inventory_vs_time(self):
+        """Plot inventory over time."""
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(self.inventory_history)), self.inventory_history, color='blue')
+        plt.xlabel('Time')
+        plt.ylabel('Inventory')
+        plt.title('Inventory Over Time')
+        plt.grid(True)
+        plt.savefig("data/inventory_over_time.png", dpi=300)
+
+    def run_all_analyses(self):
+        """Run all analyses to visualize the Market Maker's performance."""
+        self.analyze_spread_vs_inventory()
+        self.analyze_volume_vs_inventory()
+        self.analyze_pnl_vs_inventory()
+        self.analyze_pnl_vs_time()
+        self.analyze_inventory_vs_time()
+
 
 # Order Book Class
 class OrderBook:
@@ -490,7 +565,7 @@ if __name__ == "__main__":
     window_size = 480 * 5  # Last 5 days of trading
 
     for t, price in enumerate(prices):
-        if GAMBLING_AGENTS == 0:
+        if GAMBLING_AGENTS <= 0:
             print("Gamblers Bankrupt - Simulation Finished")
             break
         if t < window_size:
@@ -558,4 +633,5 @@ if __name__ == "__main__":
     # Analyze and Plot Results
     df = analysis.create_dataframe()
     df = analysis.analyze_profit(df)
+    market_maker.run_all_analyses()
     analysis.plot_results(df)
