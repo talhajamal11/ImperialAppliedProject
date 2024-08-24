@@ -151,7 +151,6 @@ class GamblerAgent(Agent):
         if self.cash < 0:
             self.is_liquidated = True  # Liquidate if cash is negative
 
-
 class HedgeFundAgent(Agent):
     def __init__(self, id, initial_cash, initial_inventory, aggressiveness):
         super().__init__(id, initial_cash, initial_inventory, aggressiveness)
