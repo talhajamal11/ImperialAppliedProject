@@ -154,7 +154,7 @@ class GamblerAgent(Agent):
 class HedgeFundAgent(Agent):
     def __init__(self, id, initial_cash, initial_inventory, aggressiveness):
         super().__init__(id, initial_cash, initial_inventory, aggressiveness)
-        self.aggressiveness = random.choice([0.5, 0.6, 0.7, 0.8, 0.9])  # Each Hedge Fund will be different level of Aggressive
+        self.aggressiveness = aggressiveness  # Each Hedge Fund will be different level of Aggressive
         self.current_position = None  # Track current open position
 
     def place_order(self, current_price, future_price, current_time):
@@ -398,7 +398,6 @@ class OrderBook:
         plt.grid(True)
         plt.show()
 
-
 # Analysis Class
 class Analysis:
     def __init__(self):
@@ -471,17 +470,17 @@ if __name__ == "__main__":
     
     # Agents Setup
     np.random.seed(seed)
-    HEDGE_FUNDS = 0
+    HEDGE_FUNDS = 5
     MARKET_MAKER = 1    
     GAMBLING_AGENTS = 1000 - HEDGE_FUNDS - MARKET_MAKER # Subtract 5 Hedge Funds and 1 Market Maker
     
     aggressiveness_values = np.random.uniform(0, 1, GAMBLING_AGENTS)
 
     gamblers = [GamblerAgent(id=i+1, initial_cash=100_000, initial_inventory=0, aggressiveness=aggressiveness_values[i]) for i in range(GAMBLING_AGENTS)]
-    hedge_funds = [HedgeFundAgent(id=i+GAMBLING_AGENTS, initial_cash=100_000_000, initial_inventory=0) for i in range(HEDGE_FUNDS)]
+    hedge_funds = [HedgeFundAgent(id=i+GAMBLING_AGENTS, initial_cash=100_000_000, initial_inventory=0, aggressiveness=random.choice([0.5, 0.6, 0.7, 0.8, 0.9])) for i in range(HEDGE_FUNDS)]
     market_maker = MarketMaker(id=GAMBLING_AGENTS+HEDGE_FUNDS+1, initial_cash=10_000_000, initial_inventory=0, risk_aversion=0.1)
     
-    agents = gamblers
+    agents = gamblers + hedge_funds
 
     # Initialize OrderBook and Analysis
     order_book = OrderBook()
@@ -521,26 +520,22 @@ if __name__ == "__main__":
         bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory)
         order_book.add_order(market_maker.id, "buy", bid, size=bid_volume, timestamp=t)
         order_book.add_order(market_maker.id, "sell", ask, size=ask_volume, timestamp=t)
-        # print(f"Market Maker Order: Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
-        
-        # pause_and_resume()
+        print(f"Market Maker Order: Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
+        order_book.plot_order_book(market_maker_bid=bid,market_maker_bid_volume=bid_volume,market_maker_ask=ask,
+                                   market_maker_ask_volume=ask_volume,title=f"Order Book Snapshot at T={t}")
         
         # Execute orders
         executed_orders = order_book.execute_trades(current_price=price, agents=agents,timestamp=t)
 
         # Adjust inventory and cash based on executed orders
         for order in executed_orders:
-            
             agent = market_maker if order['buyer_id'] == market_maker.id or order['seller_id'] == market_maker.id else agents[order['buyer_id'] - 1]
-
             if order['buyer_id'] == agent.id:
                 agent.inventory += order['size']
                 agent.cash -= order['price'] * order['size']
-            
             if order['seller_id'] == agent.id:
                 agent.inventory -= order['size']
                 agent.cash += order['price'] * order['size']
-
             if agent.cash < 0:
                 agent.is_liquidated = True  # Mark agent as liquidated
                 print(f"{agent}  has been liquidated at time {t}")
