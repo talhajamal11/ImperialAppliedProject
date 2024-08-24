@@ -122,7 +122,7 @@ class GamblerAgent(Agent):
 
             # Calculate order size and price
             price = round(recent_prices[-1] * (1 + (0.01 * self.aggressiveness) * direction), 2)
-            order_size = round((self.cash * self.aggressiveness) / price, 2)
+            order_size = round((self.cash * self.aggressiveness) / price, 2) / 10
 
             # Ensure the agent can afford the position
             if self.cash < (abs(order_size) * price):
@@ -133,7 +133,7 @@ class GamblerAgent(Agent):
             self.order_history.append((price, order_size))
 
             # Set a random holding period between 240 (half a day) and 4800 (10 days) ticks
-            self.hold_time = random.randint(240, 4800)
+            self.hold_time = random.randint(5, 60)
             self.last_trade_time = current_time  # Set the time when the position was opened
 
             return ("buy" if direction > 0 else "sell", price, abs(order_size))
@@ -150,6 +150,7 @@ class GamblerAgent(Agent):
 
         if self.cash < 0:
             self.is_liquidated = True  # Liquidate if cash is negative
+
 
 class HedgeFundAgent(Agent):
     def __init__(self, id, initial_cash, initial_inventory, aggressiveness):
@@ -500,7 +501,7 @@ if __name__ == "__main__":
         future_price = prices[t + 1] if t + 1 < len(prices) else price
         recent_prices = prices[t-window_size:t]  # Last 5 days
 
-        print(f"Time: {t}, Current Price:{recent_prices[-1]}, Next Tick Price: {future_price}")
+        # print(f"Time: {t}, Current Price:{recent_prices[-1]}, Next Tick Price: {future_price}")
 
         for agent in agents:
             order = None  # Initialize order to None for each agent
@@ -520,9 +521,9 @@ if __name__ == "__main__":
         bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory)
         order_book.add_order(market_maker.id, "buy", bid, size=bid_volume, timestamp=t)
         order_book.add_order(market_maker.id, "sell", ask, size=ask_volume, timestamp=t)
-        print(f"Market Maker Order: Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
-        order_book.plot_order_book(market_maker_bid=bid,market_maker_bid_volume=bid_volume,market_maker_ask=ask,
-                                   market_maker_ask_volume=ask_volume,title=f"Order Book Snapshot at T={t}")
+        # print(f"Market Maker Order: Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
+        # order_book.plot_order_book(market_maker_bid=bid,market_maker_bid_volume=bid_volume,market_maker_ask=ask,
+        #                            market_maker_ask_volume=ask_volume,title=f"Order Book Snapshot at T={t}")
         
         # Execute orders
         executed_orders = order_book.execute_trades(current_price=price, agents=agents,timestamp=t)
