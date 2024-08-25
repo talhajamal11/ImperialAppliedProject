@@ -228,6 +228,8 @@ class MarketMaker(Agent):
         self.volume_history = []  # Track quoted volumes over time
         self.inventory_history = []  # Track inventory over time
         self.pnl_history = []  # Track PnL over time
+        self.realized_pnl = 0  # Track realized PnL separately
+        self.unrealized_pnl = 0  # Track unrealized PnL separately
         self.distance_to_best_bid = []
         self.distance_to_best_ask = []
         self.fill_rate_history = []
@@ -244,8 +246,8 @@ class MarketMaker(Agent):
         lambda_b = max(0, 1 - 0.2 * self.risk_aversion * inventory)
         lambda_a = max(0, 1 + 0.2 * self.risk_aversion * inventory)
 
-        bid_price = self.round_to_tick(current_price - (0.2 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_b))
-        ask_price = self.round_to_tick(current_price + (0.2 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_a))
+        bid_price = self.round_to_tick(current_price - (0.1 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_b))
+        ask_price = self.round_to_tick(current_price + (0.1 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_a))
 
         # Adjust to ensure competitiveness
         if bid_price >= ask_price:
@@ -314,23 +316,32 @@ class MarketMaker(Agent):
         if trade_type == "buy":
             self.inventory += trade_size
             self.cash -= trade_price * trade_size
+            # Realized PnL for closing short position
+            if self.inventory < 0:
+                self.realized_pnl += (self.last_trade_price - trade_price) * trade_size
         elif trade_type == "sell":
             self.inventory -= trade_size
             self.cash += trade_price * trade_size
+            # Realized PnL for closing long position
+            if self.inventory > 0:
+                self.realized_pnl += (trade_price - self.last_trade_price) * trade_size
 
         # Record the executed trade in executed_orders
         self.executed_orders.append((trade_type, trade_price, trade_size, current_time))
 
-        # Record PnL after each trade
-        pnl = self.cash + (self.inventory * trade_price)
-        self.pnl_history.append(pnl)
+        # Update the last trade price to mark-to-market the current inventory
+        self.last_trade_price = trade_price
+
+        # Update PnL after each trade
+        self.unrealized_pnl = self.inventory * trade_price  # Mark-to-market value of inventory
+        total_pnl = self.realized_pnl + self.unrealized_pnl
+        self.pnl_history.append(total_pnl)
 
         if self.cash < 0:
             self.is_liquidated = True  # Liquidate if cash is negative
             print("MARKET MAKER HAS GONE BANKRUPT")
             # pause_and_resume()
             
-
     def calculate_fill_rate(self):
         # Total number of orders placed (bid + ask)
         total_orders = len(self.order_history)
@@ -443,6 +454,8 @@ class MarketMaker(Agent):
         # self.analyze_pnl_vs_inventory()
         self.analyze_pnl_vs_time()
         self.analyze_inventory_vs_time()
+        self.analyze_fill_rate_vs_time()
+        self.analyze_distance_to_best_vs_time()
 
 class OrderBook:
     def __init__(self):
