@@ -228,26 +228,44 @@ class MarketMaker(Agent):
         self.volume_history = []  # Track quoted volumes over time
         self.inventory_history = []  # Track inventory over time
         self.pnl_history = []  # Track PnL over time
+        self.distance_to_best_bid = []
+        self.distance_to_best_ask = []
+        self.fill_rate_history = []
+        self.executed_orders = []  # Track executed orders separately
         self.time_history = []  # Track timestamps for analysis
+        self.is_liquidated = False
 
     def round_to_tick(self, price):
         """Round price to the nearest 0.05 increment."""
         return round(price * 20) / 20.0
 
-    def calculate_optimal_prices(self, current_price, inventory):
-        # Tighter spread to stay on top of the order book
+    def calculate_optimal_prices(self, current_price, inventory, best_bid, best_ask):
+        # Existing logic for calculating bid_price and ask_price
         lambda_b = max(0, 1 - 0.2 * self.risk_aversion * inventory)
         lambda_a = max(0, 1 + 0.2 * self.risk_aversion * inventory)
-        
+
         bid_price = self.round_to_tick(current_price - (0.2 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_b))
         ask_price = self.round_to_tick(current_price + (0.2 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_a))
-        
+
+        # Adjust to ensure competitiveness
+        if bid_price >= ask_price:
+            ask_price = bid_price + 0.05  # Ensure the ask is greater than bid
+
+        # if bid_price < best_bid:
+        #     bid_price = self.round_to_tick(best_bid + 0.05)
+        # if ask_price > best_ask:
+        #     ask_price = self.round_to_tick(best_ask - 0.05)
+
         self.order_history.append((bid_price, ask_price))
         self.spread_history.append(ask_price - bid_price)
-        
+
+        # Track distance from best bid/ask
+        self.distance_to_best_bid.append(bid_price - best_bid)
+        self.distance_to_best_ask.append(ask_price - best_ask)
+
         return (bid_price, ask_price)
 
-    def calculate_optimal_volume(self, current_price, order_book, inventory):
+    def calculate_optimal_volume(self, current_price, order_book, inventory, best_bid_volume, best_ask_volume):
         # Factor 1: Adjust based on inventory
         inventory_factor = max(0.5, 1 - 0.5 * self.risk_aversion * abs(inventory))  # Reduce impact, increase volume
         
@@ -267,14 +285,22 @@ class MarketMaker(Agent):
         wealth_factor = max(0.5, self.cash / (self.cash + inventory * current_price)) * (1 - self.risk_aversion)
 
         # Final optimal volume calculation
-        optimal_volume = inventory_factor * depth_factor * wealth_factor * 5000  # Scale by a higher factor, e.g., 5000
+        optimal_volume = inventory_factor * depth_factor * wealth_factor * 1e4
+
+        # Make volume close to the best bid/ask volumes
+        optimal_volume = min(optimal_volume, best_bid_volume * 0.8, best_ask_volume * 0.8)
         
-        return max(100, round(optimal_volume, 2))  # Ensure the volume is at least 10
+        return max(100, round(optimal_volume, 2))  # Ensure the volume is at least 100
 
     def place_order(self, current_price, order_book, inventory):
-        bid_price, ask_price = self.calculate_optimal_prices(current_price, inventory)
-        bid_volume = self.calculate_optimal_volume(bid_price, order_book, inventory)
-        ask_volume = self.calculate_optimal_volume(ask_price, order_book, inventory)
+        best_bid = max(order_book.buy_orders.keys()) if order_book.buy_orders else current_price
+        best_ask = min(order_book.sell_orders.keys()) if order_book.sell_orders else current_price
+        best_bid_volume = sum([order["size"] for order in order_book.buy_orders.get(best_bid, [])])
+        best_ask_volume = sum([order["size"] for order in order_book.sell_orders.get(best_ask, [])])
+        
+        bid_price, ask_price = self.calculate_optimal_prices(current_price, inventory, best_bid, best_ask)
+        bid_volume = self.calculate_optimal_volume(bid_price, order_book, inventory, best_bid_volume, best_ask_volume)
+        ask_volume = self.calculate_optimal_volume(ask_price, order_book, inventory, best_bid_volume, best_ask_volume)
         
         # Store the order in the order history
         self.order_history.append(("buy", bid_price, bid_volume))
@@ -292,16 +318,60 @@ class MarketMaker(Agent):
             self.inventory -= trade_size
             self.cash += trade_price * trade_size
 
+        # Record the executed trade in executed_orders
+        self.executed_orders.append((trade_type, trade_price, trade_size, current_time))
+
         # Record PnL after each trade
         pnl = self.cash + (self.inventory * trade_price)
         self.pnl_history.append(pnl)
-        position = "close" if self.inventory == 0 else "open"
 
         if self.cash < 0:
             self.is_liquidated = True  # Liquidate if cash is negative
             print("MARKET MAKER HAS GONE BANKRUPT")
-            pause_and_resume()
-        
+            # pause_and_resume()
+            
+
+    def calculate_fill_rate(self):
+        # Total number of orders placed (bid + ask)
+        total_orders = len(self.order_history)
+        # Number of orders executed (filled)
+        filled_orders = len(self.executed_orders)
+        # Calculate fill rate
+        fill_rate = filled_orders / total_orders if total_orders > 0 else 0
+        self.fill_rate_history.append(fill_rate)
+
+    def run_all_analyses(self):
+        """Run all analyses to visualize the Market Maker's performance."""
+        self.analyze_spread_vs_inventory()
+        self.analyze_volume_vs_inventory()
+        self.analyze_pnl_vs_time()
+        self.analyze_inventory_vs_time()
+        self.analyze_fill_rate_vs_time()
+        self.analyze_distance_to_best_vs_time()
+
+    def analyze_fill_rate_vs_time(self):
+        """Plot Fill Rate over time."""
+        # self.calculate_fill_rate()
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(self.fill_rate_history)), self.fill_rate_history, color='orange')
+        plt.xlabel('Time')
+        plt.ylabel('Fill Rate')
+        plt.title('Fill Rate Over Time')
+        plt.grid(True)
+        plt.savefig("data/fill_rate.png", dpi=300)
+
+    def analyze_distance_to_best_vs_time(self):
+        """Plot distance to best bid/ask over time."""
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(self.distance_to_best_bid)), self.distance_to_best_bid, color='blue', label='Distance to Best Bid')
+        plt.plot(range(len(self.distance_to_best_ask)), self.distance_to_best_ask, color='red', label='Distance to Best Ask')
+        plt.xlabel('Time')
+        plt.ylabel('Distance to Best Bid/Ask')
+        plt.title('Distance to Best Bid/Ask Over Time')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("data/distance_to_best.png", dpi=300)
+
     def analyze_spread_vs_inventory(self):
         """Plot the bid-ask spread as a function of inventory."""
         plt.figure(figsize=(10, 6))
@@ -465,38 +535,41 @@ class OrderBook:
 
     def plot_order_book(self, market_maker_bid=None, market_maker_bid_volume=None, 
                         market_maker_ask=None, market_maker_ask_volume=None, title="Order Book Snapshot"):
-        """Plot the order book showing bid and ask prices with volumes."""
+        """Plot the order book as a depth chart."""
         buy_snapshot, sell_snapshot = self.get_order_book_snapshot()
 
         # Sort the prices
-        buy_prices = sorted(buy_snapshot.keys())
+        buy_prices = sorted(buy_snapshot.keys(), reverse=True)
         sell_prices = sorted(sell_snapshot.keys())
 
-        # Volumes corresponding to the sorted prices
-        buy_volumes = [buy_snapshot[price] for price in buy_prices]
-        sell_volumes = [sell_snapshot[price] for price in sell_prices]
+        # Cumulative volumes
+        buy_volumes = np.cumsum([buy_snapshot[price] for price in buy_prices])
+        sell_volumes = np.cumsum([sell_snapshot[price] for price in sell_prices])
 
         plt.figure(figsize=(10, 6))
 
         # Plot Bids (Buy orders)
-        plt.bar(buy_prices, buy_volumes, color='green', alpha=0.5, width=0.02, label='Bids', align='center')
+        plt.step(buy_prices, buy_volumes, where='mid', color='green', alpha=0.7, label='Bids')
 
         # Plot Asks (Sell orders)
-        plt.bar(sell_prices, sell_volumes, color='red', alpha=0.5, width=0.02, label='Asks', align='center')
+        plt.step(sell_prices, sell_volumes, where='mid', color='red', alpha=0.7, label='Asks')
 
         # Plot Market Maker's Bid
         if market_maker_bid is not None and market_maker_bid_volume is not None:
-            plt.bar(market_maker_bid, market_maker_bid_volume, color='blue', alpha=0.7, width=0.02, label='Market Maker Bid', align='center')
+            plt.axvline(x=market_maker_bid, color='blue', linestyle='--', label='Market Maker Bid')
+            plt.scatter(market_maker_bid, market_maker_bid_volume, color='blue', label='MM Bid Vol')
 
         # Plot Market Maker's Ask
         if market_maker_ask is not None and market_maker_ask_volume is not None:
-            plt.bar(market_maker_ask, market_maker_ask_volume, color='orange', alpha=0.7, width=0.02, label='Market Maker Ask', align='center')
+            plt.axvline(x=market_maker_ask, color='orange', linestyle='--', label='Market Maker Ask')
+            plt.scatter(market_maker_ask, market_maker_ask_volume, color='orange', label='MM Ask Vol')
 
         plt.xlabel('Price')
-        plt.ylabel('Volume')
+        plt.ylabel('Cumulative Volume')
         plt.title(title)
         plt.legend()
         plt.grid(True)
+        plt.savefig(f"data/{title.replace(' ', '_').lower()}.png", dpi=300)
         plt.show()
 
 # Analysis Class
@@ -526,15 +599,15 @@ class Analysis:
         market_maker_data = df[df['is_market_maker']]
 
         # Create a figure and two subplots
-        fig, axs = plt.subplots(1, 1, figsize=(10, 12))
+        fig, axs = plt.subplots(1, 1, figsize=(10, 6))
 
         # Plot PnL in the first subplot
-        axs[0].plot(market_maker_data.index, market_maker_data['PnL'], label='Market Maker PnL', color='red')
-        axs[0].set_title('Market Maker PnL Over Time')
-        axs[0].set_xlabel('Time')
-        axs[0].set_ylabel('PnL')
-        axs[0].legend()
-        axs[0].grid(True)
+        axs.plot(market_maker_data.index, market_maker_data['PnL'], label='Market Maker PnL', color='red')
+        axs.set_title('Market Maker PnL Over Time')
+        axs.set_xlabel('Time')
+        axs.set_ylabel('PnL')
+        axs.legend()
+        axs.grid(True)
 
         # Adjust layout to prevent overlap
         plt.tight_layout()
@@ -543,17 +616,18 @@ class Analysis:
     def plot_market_maker_inventory(self, df):
         market_maker_data = df[df["is_market_maker"]]
         # Create a figure and two subplots
-        fig, axs = plt.subplots(1, 1, figsize=(10, 12))
+        fig, axs = plt.subplots(1, 1, figsize=(10, 6))
         # Plot Inventory in the second subplot
-        axs[0].plot(market_maker_data.index, market_maker_data['inventory'], label='Market Maker Inventory', color='blue')
-        axs[0].set_title('Market Maker Inventory Over Time')
-        axs[0].set_xlabel('Time')
-        axs[0].set_ylabel('Inventory')
-        axs[0].legend()
-        axs[0].grid(True)
+        axs.plot(market_maker_data.index, market_maker_data['inventory'], label='Market Maker Inventory', color='blue')
+        axs.set_title('Market Maker Inventory Over Time')
+        axs.set_xlabel('Time')
+        axs.set_ylabel('Inventory')
+        axs.legend()
+        axs.grid(True)
         # Adjust layout to prevent overlap
         plt.tight_layout()
         plt.savefig("data/market_maker_inventory.png", dpi=300)
+
 
 def pause_and_resume():
     while True:
@@ -617,18 +691,22 @@ if __name__ == "__main__":
         bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory)
         order_book.add_order(market_maker.id, "buy", bid, size=bid_volume, timestamp=t)
         order_book.add_order(market_maker.id, "sell", ask, size=ask_volume, timestamp=t)
-        order_book.plot_order_book(market_maker_bid=bid,
-                                   market_maker_bid_volume=bid_volume,
-                                   market_maker_ask=ask,
-                                   market_maker_ask_volume=ask_volume)
-        pause_and_resume()
+        # order_book.plot_order_book(market_maker_bid=bid,
+        #                            market_maker_bid_volume=bid_volume,
+        #                            market_maker_ask=ask,
+        #                            market_maker_ask_volume=ask_volume)
+        # print(f"Market Maker Bid: {bid}, Bid Volume: {bid_volume}, Ask: {ask}, Ask Volume: {ask_volume}")
+        # pause_and_resume()
         # Execute orders
         executed_orders = order_book.execute_trades(agents=agents, current_price=price, timestamp=t)
-
+        # Calculate fill rate after trades are executed
+        market_maker.calculate_fill_rate()
         # Collect data for analysis
         for agent in agents:
             analysis.collect_data(agent, price)
         analysis.collect_data(market_maker, price, is_market_maker=True)
+        if market_maker.is_liquidated:
+            break
 
     # Analyze and Plot Results
     df = analysis.create_dataframe()
