@@ -304,13 +304,24 @@ class MarketMaker(Agent):
         plt.savefig("data/volume_vs_inventory.png", dpi=300)
 
     def analyze_pnl_vs_inventory(self):
-        """Plot PnL as a function of inventory."""
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.inventory_history, self.pnl_history, 'o-', color='green')
-        plt.xlabel('Inventory')
-        plt.ylabel('PnL')
-        plt.title('PnL vs Inventory')
-        plt.grid(True)
+        """Plot PnL and Inventory as a function of time on two subplots."""
+        fig, ax1 = plt.subplots(2, 1, figsize=(10, 12))
+
+        # Subplot 1: PnL vs Inventory
+        ax1[0].plot(range(len(self.pnl_history)), self.pnl_history, 'o-', color='green')
+        ax1[0].set_xlabel('Inventory')
+        ax1[0].set_ylabel('PnL')
+        ax1[0].set_title('PnL vs Inventory')
+        ax1[0].grid(True)
+
+        # Subplot 2: Inventory over time
+        ax1[1].plot(range(len(self.inventory_history)), self.inventory_history, 'o-', color='blue')
+        ax1[1].set_xlabel('Time')
+        ax1[1].set_ylabel('Inventory')
+        ax1[1].set_title('Inventory Over Time')
+        ax1[1].grid(True)
+
+        plt.tight_layout()  # Adjust subplots to fit in the figure area.
         plt.savefig("data/pnl_vs_inventory.png", dpi=300)
 
     def analyze_pnl_vs_time(self):
@@ -340,7 +351,6 @@ class MarketMaker(Agent):
         self.analyze_pnl_vs_inventory()
         self.analyze_pnl_vs_time()
         self.analyze_inventory_vs_time()
-
 
 # Order Book Class
 class OrderBook:
