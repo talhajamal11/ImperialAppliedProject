@@ -241,22 +241,27 @@ class MarketMaker(Agent):
         """Round price to the nearest 0.05 increment."""
         return round(price * 20) / 20.0
 
-    def calculate_optimal_prices(self, current_price, inventory, best_bid, best_ask):
-        # Existing logic for calculating bid_price and ask_price
-        lambda_b = max(0, 1 - 0.2 * self.risk_aversion * inventory)
-        lambda_a = max(0, 1 + 0.2 * self.risk_aversion * inventory)
+    def calculate_optimal_prices(self, current_price, inventory, sigma, T, kappa, best_bid, best_ask):
+        """
+        Calculate optimal bid and ask prices using the Avellaneda-Stoikov model.
 
-        bid_price = self.round_to_tick(current_price - (0.1 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_b))
-        ask_price = self.round_to_tick(current_price + (0.1 / self.risk_aversion) * np.log(1 + self.risk_aversion * lambda_a))
+        :param current_price: The current mid-price of the asset.
+        :param inventory: The current inventory level.
+        :param sigma: The volatility of the asset.
+        :param T: The time horizon for the market maker.
+        :param kappa: The market impact parameter.
+        :return: The optimal bid and ask prices.
+        """
+        # Calculate the reservation price
+        reservation_price = current_price - (inventory * self.risk_aversion * sigma**2 * T)
+        
+        # Calculate the optimal bid and ask prices using the Avellaneda-Stoikov model
+        bid_price = self.round_to_tick(reservation_price - (1 / self.risk_aversion) * np.log(1 + self.risk_aversion / kappa))
+        ask_price = self.round_to_tick(reservation_price + (1 / self.risk_aversion) * np.log(1 + self.risk_aversion / kappa))
 
-        # Adjust to ensure competitiveness
+        # Ensure the bid is lower than the ask
         if bid_price >= ask_price:
-            ask_price = bid_price + 0.05  # Ensure the ask is greater than bid
-
-        # if bid_price < best_bid:
-        #     bid_price = self.round_to_tick(best_bid + 0.05)
-        # if ask_price > best_ask:
-        #     ask_price = self.round_to_tick(best_ask - 0.05)
+            ask_price = bid_price + 0.05
 
         self.order_history.append((bid_price, ask_price))
         self.spread_history.append(ask_price - bid_price)
@@ -265,7 +270,8 @@ class MarketMaker(Agent):
         self.distance_to_best_bid.append(bid_price - best_bid)
         self.distance_to_best_ask.append(ask_price - best_ask)
 
-        return (bid_price, ask_price)
+        return bid_price, ask_price
+
 
     def calculate_optimal_volume(self, current_price, order_book, inventory, best_bid_volume, best_ask_volume):
         # Factor 1: Adjust based on inventory
@@ -287,22 +293,20 @@ class MarketMaker(Agent):
         wealth_factor = max(0.5, self.cash / (self.cash + inventory * current_price)) * (1 - self.risk_aversion)
 
         # Final optimal volume calculation
-        optimal_volume = inventory_factor * depth_factor * wealth_factor * 1e4
+        optimal_volume = inventory_factor * depth_factor * wealth_factor * 1e3
 
         # Make volume close to the best bid/ask volumes
         optimal_volume = min(optimal_volume, best_bid_volume * 0.8, best_ask_volume * 0.8)
         
         return max(100, round(optimal_volume, 2))  # Ensure the volume is at least 100
 
-    def place_order(self, current_price, order_book, inventory):
+    def place_order(self, current_price, order_book, inventory, sigma, T, kappa):
         best_bid = max(order_book.buy_orders.keys()) if order_book.buy_orders else current_price
         best_ask = min(order_book.sell_orders.keys()) if order_book.sell_orders else current_price
-        best_bid_volume = sum([order["size"] for order in order_book.buy_orders.get(best_bid, [])])
-        best_ask_volume = sum([order["size"] for order in order_book.sell_orders.get(best_ask, [])])
         
-        bid_price, ask_price = self.calculate_optimal_prices(current_price, inventory, best_bid, best_ask)
-        bid_volume = self.calculate_optimal_volume(bid_price, order_book, inventory, best_bid_volume, best_ask_volume)
-        ask_volume = self.calculate_optimal_volume(ask_price, order_book, inventory, best_bid_volume, best_ask_volume)
+        bid_price, ask_price = self.calculate_optimal_prices(current_price, inventory, sigma, T, kappa, best_bid, best_ask)
+        bid_volume = self.calculate_optimal_volume(bid_price, order_book, inventory, sum([order["size"] for order in order_book.buy_orders.get(best_bid, [])]), sum([order["size"] for order in order_book.sell_orders.get(best_ask, [])]))
+        ask_volume = self.calculate_optimal_volume(ask_price, order_book, inventory, sum([order["size"] for order in order_book.buy_orders.get(best_bid, [])]), sum([order["size"] for order in order_book.sell_orders.get(best_ask, [])]))
         
         # Store the order in the order history
         self.order_history.append(("buy", bid_price, bid_volume))
@@ -311,6 +315,7 @@ class MarketMaker(Agent):
         self.inventory_history.append(inventory)
         
         return bid_price, bid_volume, ask_price, ask_volume
+
 
     def order_executed(self, trade_price, trade_size, trade_type, current_time):
         if trade_type == "buy":
@@ -658,10 +663,14 @@ def pause_and_resume():
 if __name__ == "__main__":
     # Simulate Stock Prices
     seed = 50
-    simulator = PriceSimulator(days=6, initial_price=100, mu=0.0001, sigma=0.25, dt=1, seed=seed)
+    simulator = PriceSimulator(days=3, initial_price=100, mu=0.0001, sigma=0.25, dt=1, seed=seed)
     prices = simulator.simulate_brownian_motion_prices()
     price_df = simulator.create_dataframe(prices)
     simulator.plot_prices()
+    
+    # Market Maker Parameters
+    T = 1 # Time horizon for the market maker (one trading day divided by the number of minutes per day)
+    kappa = 0.5  # Market impact parameter (example value)
     
     # Agents Setup
     np.random.seed(seed)
@@ -680,7 +689,7 @@ if __name__ == "__main__":
     analysis = Analysis()
 
     # Run the Simulation
-    window_size = 480 * 5  # Last 5 days of trading
+    window_size = 480  # Last 1 days of trading
 
     for t, price in enumerate(prices):
         if t < window_size:
@@ -689,6 +698,10 @@ if __name__ == "__main__":
         # Future price is simply the next price in the simulation
         future_price = prices[t + 120] if t + 120 < len(prices) else price
         recent_prices = prices[t-window_size:t]  # Last 5 days
+
+        # Calculate sigma from recent_prices
+        log_returns = np.log(np.array(recent_prices[1:]) / np.array(recent_prices[:-1]))
+        sigma = np.std(log_returns)
 
         print(f"Time: {t}, Current Price:{recent_prices[-1]}, Future Price: {future_price}")
 
@@ -701,7 +714,8 @@ if __name__ == "__main__":
                 order_book.add_order(agent.id, order[0], order[1], size=order[2], timestamp=t)
 
         # Market Maker places orders based on its strategy
-        bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory)
+        bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory, sigma=sigma, T=T, kappa=kappa)
+        # bid, bid_volume, ask, ask_volume = market_maker.place_order(current_price=price, order_book=order_book, inventory=market_maker.inventory)
         order_book.add_order(market_maker.id, "buy", bid, size=bid_volume, timestamp=t)
         order_book.add_order(market_maker.id, "sell", ask, size=ask_volume, timestamp=t)
         # order_book.plot_order_book(market_maker_bid=bid,
@@ -714,12 +728,12 @@ if __name__ == "__main__":
         executed_orders = order_book.execute_trades(agents=agents, current_price=price, timestamp=t)
         # Calculate fill rate after trades are executed
         market_maker.calculate_fill_rate()
+        if market_maker.is_liquidated:
+            break
         # Collect data for analysis
         for agent in agents:
             analysis.collect_data(agent, price)
         analysis.collect_data(market_maker, price, is_market_maker=True)
-        if market_maker.is_liquidated:
-            break
 
     # Analyze and Plot Results
     df = analysis.create_dataframe()
