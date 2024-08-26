@@ -318,7 +318,6 @@ class MarketMaker(Agent):
         
         return bid_price, bid_volume, ask_price, ask_volume
 
-
     def order_executed(self, trade_price, trade_size, trade_type, current_time):
         if trade_type == "buy":
             self.inventory += trade_size
