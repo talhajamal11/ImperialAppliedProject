@@ -227,7 +227,9 @@ class MarketMaker(Agent):
         self.spread_history = []  # Track bid-ask spread over time
         self.volume_history = []  # Track quoted volumes over time
         self.inventory_history = []  # Track inventory over time
-        self.pnl_history = []  # Track PnL over time
+        self.pnl_history = []  # Track combined PnL over time
+        self.realized_pnl_history = []  # Track realized PnL separately
+        self.unrealized_pnl_history = []  # Track unrealized PnL separately
         self.realized_pnl = 0  # Track realized PnL separately
         self.unrealized_pnl = 0  # Track unrealized PnL separately
         self.distance_to_best_bid = []
@@ -345,7 +347,14 @@ class MarketMaker(Agent):
         if self.cash < 0:
             self.is_liquidated = True  # Liquidate if cash is negative
             print("MARKET MAKER HAS GONE BANKRUPT")
-            # pause_and_resume()
+
+        # Update separate PnL histories
+        self.update_pnl_histories()
+
+    def update_pnl_histories(self):
+        """Update the separate histories for realized and unrealized PnL."""
+        self.realized_pnl_history.append(self.realized_pnl)
+        self.unrealized_pnl_history.append(self.unrealized_pnl)
             
     def calculate_fill_rate(self):
         # Total number of orders placed (bid + ask)
@@ -355,15 +364,6 @@ class MarketMaker(Agent):
         # Calculate fill rate
         fill_rate = filled_orders / total_orders if total_orders > 0 else 0
         self.fill_rate_history.append(fill_rate)
-
-    def run_all_analyses(self):
-        """Run all analyses to visualize the Market Maker's performance."""
-        self.analyze_spread_vs_inventory()
-        self.analyze_volume_vs_inventory()
-        self.analyze_pnl_vs_time()
-        self.analyze_inventory_vs_time()
-        self.analyze_fill_rate_vs_time()
-        self.analyze_distance_to_best_vs_time()
 
     def analyze_fill_rate_vs_time(self):
         """Plot Fill Rate over time."""
@@ -452,15 +452,37 @@ class MarketMaker(Agent):
         plt.grid(True)
         plt.savefig("data/inventory_over_time.png", dpi=300)
 
+    def analyze_realized_pnl(self):
+        """Plot Realized PnL over time."""
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(self.realized_pnl_history)), self.realized_pnl_history, color='green')
+        plt.xlabel('Time')
+        plt.ylabel('Realized PnL')
+        plt.title('Realized PnL Over Time')
+        plt.grid(True)
+        plt.savefig("data/realized_pnl.png", dpi=300)
+
+    def analyze_unrealized_pnl(self):
+        """Plot Unrealized PnL over time."""
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(self.unrealized_pnl_history)), self.unrealized_pnl_history, color='orange')
+        plt.xlabel('Time')
+        plt.ylabel('Unrealized PnL')
+        plt.title('Unrealized PnL Over Time')
+        plt.grid(True)
+        plt.savefig("data/unrealized_pnl.png", dpi=300)
+
+
     def run_all_analyses(self):
         """Run all analyses to visualize the Market Maker's performance."""
         self.analyze_spread_vs_inventory()
         self.analyze_volume_vs_inventory()
-        # self.analyze_pnl_vs_inventory()
         self.analyze_pnl_vs_time()
         self.analyze_inventory_vs_time()
         self.analyze_fill_rate_vs_time()
         self.analyze_distance_to_best_vs_time()
+        self.analyze_realized_pnl()
+        self.analyze_unrealized_pnl()
 
 class OrderBook:
     def __init__(self):
@@ -680,7 +702,7 @@ if __name__ == "__main__":
     aggressiveness_values = np.random.uniform(0, 0.4, UNINFORMED_INVESTORS)
 
     uninformed_investors = [UninformedInvestorAgent(id=i+1, initial_cash=100_000, initial_inventory=0, aggressiveness=aggressiveness_values[i]) for i in range(UNINFORMED_INVESTORS)]
-    market_maker = MarketMaker(id=UNINFORMED_INVESTORS+1, initial_cash=10_000_000, initial_inventory=0, risk_aversion=0.005)
+    market_maker = MarketMaker(id=UNINFORMED_INVESTORS+1, initial_cash=10_000_000, initial_inventory=0, risk_aversion=0.5)
     
     agents = uninformed_investors
 
@@ -704,6 +726,11 @@ if __name__ == "__main__":
         sigma = np.std(log_returns)
 
         print(f"Time: {t}, Current Price:{recent_prices[-1]}, Future Price: {future_price}")
+
+        try:
+            print(f"Market Maker PnL: {market_maker.pnl_history[-1]}")
+        except:
+            pass
 
         for agent in agents:
             order = None  # Initialize order to None for each agent
